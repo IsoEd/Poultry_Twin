@@ -68,7 +68,7 @@ def seed():
     surviving    = STARTING_FLOCK
     cum_revenue  = 0
     cum_cost     = 0
-    cash_on_hand = 500_000  # opening cash NGN before capital outlay
+    cash_on_hand = 100_000  # tight launch — most capital spent on birds and infrastructure
 
     print(f"  🐔 Week 1 capital outlay: NGN {WEEK1_CAPITAL:,.0f} (birds + infrastructure)")
 

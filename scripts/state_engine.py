@@ -34,7 +34,7 @@ def run_state_engine():
     surviving    = STARTING_FLOCK
     cum_revenue  = 0
     cum_cost     = 0
-    cash_on_hand = 500_000
+    cash_on_hand = 100_000  # tight launch — most capital spent on birds and infrastructure
 
     for _, row in df.iterrows():
         week         = int(row["week_number"])
