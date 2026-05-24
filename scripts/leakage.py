@@ -1,43 +1,28 @@
 import sys
 sys.path.insert(0, ".")
 
-import numpy as np
 import pandas as pd
 from scripts.db_config import get_connection, get_engine
-from scripts.utils import eggs_expected, egg_variance, egg_zscore, leakage_flag
-
-# ── Leakage detection parameters ─────────────────────────────────────────────
-MIN_WEEKS_FOR_ZSCORE = 4  # minimum history needed before Z-score is meaningful
+from scripts.utils import eggs_expected, egg_variance, variance_pct, leakage_flag
 
 
 def compute_leakage(df: pd.DataFrame) -> list[dict]:
     """
-    For each week compute expected vs reported eggs, variance, Z-score, and flag.
-    Z-score requires at least MIN_WEEKS_FOR_ZSCORE of history to be meaningful.
+    For each week compute expected vs reported eggs, variance,
+    variance percentage, and flag level.
+    Simpler and more interpretable than Z-score for a single farm.
     """
     records = []
 
-    variances = []
-
     for _, row in df.iterrows():
-        week            = int(row["week_number"])
-        wdate           = row["week_date"]
-        surviving       = int(row["surviving_birds"])
-        reported        = int(row["eggs_collected"])
-        expected        = eggs_expected(surviving, week)
-        variance        = egg_variance(expected, reported)
-
-        variances.append(variance)
-
-        # Z-score only meaningful once we have enough history
-        if len(variances) >= MIN_WEEKS_FOR_ZSCORE:
-            mean_var = float(np.mean(variances[:-1]))  # exclude current week
-            std_var  = float(np.std(variances[:-1]))
-            z        = egg_zscore(variance, mean_var, std_var)
-        else:
-            z = 0.0
-
-        flag = leakage_flag(z)
+        week     = int(row["week_number"])
+        wdate    = row["week_date"]
+        surviving = int(row["surviving_birds"])
+        reported  = int(row["eggs_collected"])
+        expected  = eggs_expected(surviving, week)
+        variance  = egg_variance(expected, reported)
+        var_pct   = variance_pct(expected, reported)
+        flag      = leakage_flag(var_pct)
 
         records.append({
             "week_number":   week,
@@ -45,7 +30,7 @@ def compute_leakage(df: pd.DataFrame) -> list[dict]:
             "expected_eggs": expected,
             "reported_eggs": reported,
             "variance":      variance,
-            "z_score":       round(z, 3),
+            "z_score":       var_pct,   # repurposing column for variance %
             "flag_level":    flag
         })
 
@@ -56,7 +41,7 @@ def run_leakage_engine():
     conn   = get_connection()
     engine = get_engine()
 
-    # ── Load farm state and inputs jointly ────────────────────────────────────
+    # ── Load farm state and inputs ────────────────────────────────────────────
     df = pd.read_sql("""
         SELECT fs.week_number, fs.week_date, fs.surviving_birds,
                fi.eggs_collected
@@ -65,8 +50,12 @@ def run_leakage_engine():
         ORDER BY fs.week_number ASC
     """, engine)
 
+    engine.dispose()
+
     if df.empty:
-        raise ValueError("No data found — run seed.py and state_engine.py first.")
+        print("⚠️  No data found — run seed.py and state_engine.py first.")
+        conn.close()
+        return
 
     # ── Compute leakage records ───────────────────────────────────────────────
     records = compute_leakage(df)
@@ -86,10 +75,10 @@ def run_leakage_engine():
 
     conn.commit()
     cur.close()
-    engine.dispose()
+    conn.close()
 
     # ── Summary output ────────────────────────────────────────────────────────
-    flags  = [r for r in records if r["flag_level"] == "FLAG"]
+    flags   = [r for r in records if r["flag_level"] == "FLAG"]
     watches = [r for r in records if r["flag_level"] == "WATCH"]
 
     print(f"\n✅ Leakage engine complete — {len(records)} weeks processed.")
@@ -102,14 +91,14 @@ def run_leakage_engine():
         for f in flags:
             print(f"      Week {f['week_number']}: expected {f['expected_eggs']} "
                   f"got {f['reported_eggs']} — variance {f['variance']} "
-                  f"Z-score {f['z_score']}")
+                  f"({f['z_score']:.1f}% shortfall)")
 
     if watches:
         print(f"\n   ⚠️  Watch weeks:")
         for w in watches:
             print(f"      Week {w['week_number']}: expected {w['expected_eggs']} "
                   f"got {w['reported_eggs']} — variance {w['variance']} "
-                  f"Z-score {w['z_score']}")
+                  f"({w['z_score']:.1f}% shortfall)")
 
 
 if __name__ == "__main__":

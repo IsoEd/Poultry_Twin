@@ -12,7 +12,6 @@ from scripts.leakage       import run_leakage_engine
 from scripts.volatility    import run_volatility_engine
 
 # ── Scheduler configuration ───────────────────────────────────────────────────
-# All engines run every Monday at 06:00 AM — after the farmer logs weekend data
 SCHEDULE_DAY  = "mon"
 SCHEDULE_HOUR = 6
 
@@ -20,8 +19,6 @@ SCHEDULE_HOUR = 6
 def run_pipeline():
     """
     Full weekly pipeline — runs all engines in dependency order.
-    State must be computed before simulation, decision, and leakage can run.
-    Volatility runs last as it feeds into simulation on the next cycle.
     """
     print(f"\n{'='*60}")
     print(f"  🚀 Pipeline started — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -74,7 +71,6 @@ def start_scheduler():
 
 
 if __name__ == "__main__":
-    # For testing — run the pipeline immediately without waiting for schedule
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--now":
         run_pipeline()

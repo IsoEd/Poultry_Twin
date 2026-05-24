@@ -3,44 +3,39 @@ sys.path.insert(0, ".")
 
 import numpy as np
 import pandas as pd
-from arch import arch_model
 from scripts.db_config import get_connection, get_engine
 
 # ── Volatility forecast parameters ────────────────────────────────────────────
-MIN_WEEKS_FOR_GARCH = 12  # minimum price history needed to fit GARCH
-FORECAST_HORIZON    = 4   # weeks ahead to forecast volatility
+MIN_WEEKS_FOR_FORECAST = 4   # minimum price history needed
+FORECAST_HORIZON       = 4   # weeks ahead to forecast
 
 
-def fit_garch(prices: np.ndarray) -> dict:
+def compute_volatility(prices: np.ndarray) -> dict:
     """
-    Fit a GARCH(1,1) model to weekly egg price returns.
-    Returns model parameters and 4-week forward volatility forecasts.
+    Compute forward price volatility using standard deviation of weekly returns.
+    Returns 4-week forward volatility estimates and descriptive statistics.
     """
-    # Convert prices to percentage returns
-    returns = pd.Series(np.diff(np.log(prices)) * 100)
+    # Weekly log returns
+    returns = np.diff(np.log(prices)) * 100
 
-    # Fit GARCH(1,1)
-    model  = arch_model(returns, vol="Garch", p=1, q=1, dist="normal", rescale=False)
-    result = model.fit(disp="off")
+    # Historical mean and standard deviation of returns
+    mu  = round(float(np.mean(returns)), 6)
+    std = round(float(np.std(returns)), 6)
 
-    # Extract parameters
-    params = result.params
-    mu     = float(params.get("mu", params.iloc[0]))
-    alpha  = float(params.get("alpha[1]", params.iloc[2]))
-    beta   = float(params.get("beta[1]", params.iloc[3]))
-
-    # 4-week forward volatility forecast
-    forecast    = result.forecast(horizon=FORECAST_HORIZON, reindex=False)
-    vol_forecasts = np.sqrt(forecast.variance.iloc[-1].values)
+    # Forward volatility — constant std projection over 4 weeks
+    # Scales by sqrt(t) consistent with random walk assumption
+    vol_forecasts = [
+        round(float(std * np.sqrt(t)), 4) for t in range(1, FORECAST_HORIZON + 1)
+    ]
 
     return {
-        "mu":    round(mu, 6),
-        "alpha": round(alpha, 6),
-        "beta":  round(beta, 6),
-        "vol_week_1": round(float(vol_forecasts[0]), 4),
-        "vol_week_2": round(float(vol_forecasts[1]), 4),
-        "vol_week_3": round(float(vol_forecasts[2]), 4),
-        "vol_week_4": round(float(vol_forecasts[3]), 4),
+        "mu":         mu,
+        "alpha":      0.0,    # not applicable — kept for schema compatibility
+        "beta":       0.0,    # not applicable — kept for schema compatibility
+        "vol_week_1": vol_forecasts[0],
+        "vol_week_2": vol_forecasts[1],
+        "vol_week_3": vol_forecasts[2],
+        "vol_week_4": vol_forecasts[3],
     }
 
 
@@ -55,18 +50,20 @@ def run_volatility_engine():
         ORDER BY week_number ASC
     """, engine)
 
-    if len(df) < MIN_WEEKS_FOR_GARCH:
-        print(f"⚠️  Not enough price history — need at least {MIN_WEEKS_FOR_GARCH} weeks.")
-        engine.dispose()
+    engine.dispose()
+
+    if len(df) < MIN_WEEKS_FOR_FORECAST:
+        print(f"⚠️  Not enough price history — need at least {MIN_WEEKS_FOR_FORECAST} weeks.")
+        conn.close()
         return
 
-    prices     = df["egg_price_per_crate"].values.astype(float)
+    prices      = df["egg_price_per_crate"].values.astype(float)
     week_number = int(df["week_number"].iloc[-1])
 
-    print(f"  📈 Fitting GARCH(1,1) on {len(prices)} weeks of egg price data...")
+    print(f"  📈 Computing price volatility from {len(prices)} weeks of data...")
 
-    # ── Fit GARCH model ───────────────────────────────────────────────────────
-    garch = fit_garch(prices)
+    # ── Compute volatility ────────────────────────────────────────────────────
+    vol = compute_volatility(prices)
 
     # ── Write to volatility_forecasts ─────────────────────────────────────────
     cur = conn.cursor()
@@ -76,34 +73,31 @@ def run_volatility_engine():
          garch_alpha, garch_beta, garch_mu)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (week_number) DO UPDATE SET
-            vol_week_1 = EXCLUDED.vol_week_1,
-            vol_week_2 = EXCLUDED.vol_week_2,
-            vol_week_3 = EXCLUDED.vol_week_3,
-            vol_week_4 = EXCLUDED.vol_week_4,
+            vol_week_1  = EXCLUDED.vol_week_1,
+            vol_week_2  = EXCLUDED.vol_week_2,
+            vol_week_3  = EXCLUDED.vol_week_3,
+            vol_week_4  = EXCLUDED.vol_week_4,
             garch_alpha = EXCLUDED.garch_alpha,
             garch_beta  = EXCLUDED.garch_beta,
             garch_mu    = EXCLUDED.garch_mu,
             run_date    = NOW()
     """, (week_number,
-          garch["vol_week_1"], garch["vol_week_2"],
-          garch["vol_week_3"], garch["vol_week_4"],
-          garch["alpha"], garch["beta"], garch["mu"]))
+          vol["vol_week_1"], vol["vol_week_2"],
+          vol["vol_week_3"], vol["vol_week_4"],
+          vol["alpha"], vol["beta"], vol["mu"]))
 
     conn.commit()
     cur.close()
-    engine.dispose()
+    conn.close()
 
-    # ── Summary output ────────────────────────────────────────────────────────
     print(f"\n✅ Volatility engine complete — week {week_number}.")
-    print(f"   GARCH parameters:")
-    print(f"      mu    : {garch['mu']}")
-    print(f"      alpha : {garch['alpha']}")
-    print(f"      beta  : {garch['beta']}")
+    print(f"   Mean weekly return : {vol['mu']:.4f}%")
+    print(f"   Weekly std dev     : {vol['vol_week_1']:.4f}%")
     print(f"\n   4-week volatility forecast:")
-    print(f"      Week +1 : {garch['vol_week_1']:.4f}%")
-    print(f"      Week +2 : {garch['vol_week_2']:.4f}%")
-    print(f"      Week +3 : {garch['vol_week_3']:.4f}%")
-    print(f"      Week +4 : {garch['vol_week_4']:.4f}%")
+    print(f"      Week +1 : {vol['vol_week_1']:.4f}%")
+    print(f"      Week +2 : {vol['vol_week_2']:.4f}%")
+    print(f"      Week +3 : {vol['vol_week_3']:.4f}%")
+    print(f"      Week +4 : {vol['vol_week_4']:.4f}%")
 
 
 if __name__ == "__main__":

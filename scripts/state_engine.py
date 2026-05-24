@@ -2,7 +2,7 @@ import sys
 sys.path.insert(0, ".")
 
 import pandas as pd
-from scripts.db_config import get_connection
+from scripts.db_config import get_connection, get_engine
 from scripts.utils import (
     expected_lay_rate,
     compute_fcr,
@@ -20,11 +20,12 @@ WEEK1_CAPITAL   = 5_110_000
 
 def run_state_engine():
     conn = get_connection()
+    engine = get_engine()
     cur  = conn.cursor()
 
     # ── Load farm_inputs and market_prices ────────────────────────────────────
-    inputs  = pd.read_sql("SELECT * FROM farm_inputs ORDER BY week_number", conn)
-    markets = pd.read_sql("SELECT * FROM market_prices ORDER BY week_number", conn)
+    inputs  = pd.read_sql("SELECT * FROM farm_inputs ORDER BY week_number", engine)
+    markets = pd.read_sql("SELECT * FROM market_prices ORDER BY week_number", engine)
 
     df = pd.merge(inputs, markets, on="week_number", suffixes=("_in", "_mkt"))
 
@@ -93,6 +94,7 @@ def run_state_engine():
     conn.commit()
     cur.close()
     conn.close()
+    engine.dispose()
 
     print(f"✅ State engine complete.")
     print(f"   Surviving birds at week {week} : {surviving}")

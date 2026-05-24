@@ -4,7 +4,7 @@ import math
 def expected_lay_rate(week: int) -> float:
     """
     Piecewise laying curve for ISA Brown POL birds in tropical Nigerian conditions.
-    Week 1 = arrival at ~16 weeks biological age.
+    Week 1 = arrival at ~18 weeks biological age, already near peak production.
     """
     if week <= 4:
         return 0.85 + (0.87 - 0.85) * (week - 1) / 3
@@ -31,7 +31,7 @@ def weekly_revenue(eggs_sold: int, price_per_crate: float) -> float:
     return round(eggs_to_crates(eggs_sold) * price_per_crate, 2)
 
 
-# ── Feed cost ─────────────────────────────────────────────────────────────────
+# ── Feed ──────────────────────────────────────────────────────────────────────
 def weekly_feed_cost(feed_bags_used: float, feed_price_per_bag: float) -> float:
     """Total feed cost for the week."""
     return round(feed_bags_used * feed_price_per_bag, 2)
@@ -78,24 +78,24 @@ def egg_variance(expected: int, reported: int) -> int:
     return expected - reported
 
 
-def egg_zscore(variance: int, mean_variance: float, std_variance: float) -> float:
+def variance_pct(expected: int, reported: int) -> float:
     """
-    Z-score of current variance against historical distribution.
-    Flags statistical anomalies indicating theft or leakage.
+    Variance as a percentage of expected eggs.
+    More interpretable than Z-score for a single farm operator.
     """
-    if std_variance == 0:
+    if expected == 0:
         return 0.0
-    return round((variance - mean_variance) / std_variance, 3)
+    return round((expected - reported) / expected * 100, 2)
 
 
-def leakage_flag(z_score: float) -> str:
+def leakage_flag(variance_percentage: float) -> str:
     """
-    Classify leakage severity by Z-score.
-    NORMAL < 1.5 | WATCH 1.5–2.5 | FLAG > 2.5
+    Classify leakage severity by variance percentage.
+    NORMAL < 5% | WATCH 5-10% | FLAG > 10%
     """
-    if z_score > 2.5:
+    if variance_percentage > 10:
         return "FLAG"
-    elif z_score > 1.5:
+    elif variance_percentage > 5:
         return "WATCH"
     return "NORMAL"
 

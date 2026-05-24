@@ -1,5 +1,7 @@
 # callbacks.py
 
+from dash import Output, Input, State
+from datetime import timedelta
 import sys
 import os
 import pandas as pd
@@ -207,3 +209,98 @@ def register_callbacks(app):
         sell = bool(df["sell_signal"].iloc[0])
         cull = bool(df["cull_signal"].iloc[0])
         return create_signal_indicator(sell, cull)
+    
+    # ---- TAB ROUTING ----
+    @app.callback(
+        Output("tab-content", "children"),
+        Input("main-tabs", "value")
+    )
+    def render_tab(tab):
+        from layouts import build_dashboard, build_entry
+        if tab == "dashboard":
+            return build_dashboard()
+        return build_entry()
+
+
+    # ---- DATA ENTRY SUBMIT ----
+    @app.callback(
+        Output("submit-feedback", "children"),
+        Input("submit-btn", "n_clicks"),
+        [
+            State("input-eggs-collected",  "value"),
+            State("input-eggs-sold",       "value"),
+            State("input-price-crate",     "value"),
+            State("input-bird-deaths",     "value"),
+            State("input-feed-bags",       "value"),
+            State("input-diesel-litres",   "value"),
+            State("input-cash",            "value"),
+            State("input-market-egg",      "value"),
+            State("input-market-feed",     "value"),
+            State("input-market-diesel",   "value"),
+            State("input-usd-ngn",         "value"),
+        ],
+        prevent_initial_call=True
+    )
+    def submit_entry(n_clicks, eggs_collected, eggs_sold, price_crate,
+                     bird_deaths, feed_bags, diesel_litres, cash,
+                     market_egg, market_feed, market_diesel, usd_ngn):
+
+        fields = [eggs_collected, eggs_sold, price_crate, bird_deaths,
+                  feed_bags, diesel_litres, cash, market_egg,
+                  market_feed, market_diesel, usd_ngn]
+
+        if any(f is None for f in fields):
+            return html.P(
+                "⚠️  Please fill in all fields before submitting.",
+                style={"color": COLOR_WARNING, "fontSize": "13px"}
+            )
+
+        try:
+            engine = get_engine()
+            from scripts.db_config import get_connection
+            conn = get_connection()
+
+            last = pd.read_sql(
+                "SELECT COALESCE(MAX(week_number), 0) AS w, "
+                "COALESCE(MAX(week_date), CURRENT_DATE) AS d FROM farm_inputs",
+                engine
+            ).iloc[0]
+            engine.dispose()
+
+            next_week = int(last["w"]) + 1
+            next_date = pd.to_datetime(last["d"]).date() + timedelta(weeks=1)
+
+            cur = conn.cursor()
+
+            cur.execute("""
+                INSERT INTO farm_inputs
+                (week_number, week_date, eggs_collected, eggs_sold,
+                 price_per_crate, bird_deaths, feed_bags_used,
+                 diesel_litres, cash_on_hand)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (next_week, next_date, int(eggs_collected), int(eggs_sold),
+                  float(price_crate), int(bird_deaths), float(feed_bags),
+                  float(diesel_litres), float(cash)))
+
+            cur.execute("""
+                INSERT INTO market_prices
+                (week_number, week_date, egg_price_per_crate,
+                 feed_price_per_bag, diesel_per_litre, usd_ngn_rate)
+                VALUES (%s,%s,%s,%s,%s,%s)
+            """, (next_week, next_date, float(market_egg), float(market_feed),
+                  float(market_diesel), float(usd_ngn)))
+
+            conn.commit()
+            cur.close()
+            conn.close()
+
+            return html.P(
+                f"✅  Week {next_week} data saved. Pipeline runs Monday at 06:00.",
+                style={"color": COLOR_SUCCESS, "fontSize": "13px"}
+            )
+
+        except Exception as e:
+            return html.P(
+                f"❌  Error: {e}",
+                style={"color": COLOR_ALERT, "fontSize": "13px"}
+            )
